@@ -1,4 +1,5 @@
-# 🌍 Global Economic Trends Dashboard
+
+ 🌍 Global Economic Trends Dashboard
 
 A comprehensive interactive dashboard for visualizing **119+ macroeconomic and development indicators** across **85+ countries** using World Bank Open Data.
 
