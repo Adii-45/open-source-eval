@@ -4,7 +4,6 @@ Interactive Streamlit application for visualizing macroeconomic indicators
 """
 
 import streamlit as st
-import pandas as pd
 import sys
 from datetime import datetime
 
@@ -28,6 +27,7 @@ from utils.helpers import (
     save_data_cache,
     load_data_cache
 )
+from utils.explanations import generate_explanations
 from models.predictor import gdp_predictor
 
 
@@ -55,41 +55,40 @@ st.markdown("""
         text-align: center;
         margin-bottom: 2rem;
     }
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-    }
     .stMetric {
         background-color: #ffffff;
         padding: 1rem;
         border-radius: 0.5rem;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
+    /* Use pointer cursor for dropdowns (select/multiselect) */
+    div[data-baseweb="select"],
+    div[data-baseweb="select"] * {
+        cursor: pointer !important;
+    }
+    /* Hide anchor-link icon shown on heading hover */
+    h1 a, h2 a, h3 a, h4 a, h5 a, h6 a {
+        display: none !important;
+    }
+    /* Hide default Streamlit footer and hamburger menu */
+    footer {visibility: hidden;}
+    #MainMenu {visibility: hidden;}
     </style>
 """, unsafe_allow_html=True)
 
 
 @st.cache_data(ttl=86400)  # Cache for 24 hours
-def fetch_data(indicator, countries, start_year, end_year):
+def fetch_data(indicator_key, countries, start_year, end_year):
     """Fetch and cache data from World Bank API"""
-    cache_key = f"{indicator}_{'_'.join(countries)}_{start_year}_{end_year}"
+    cache_key = f"{indicator_key}_{'_'.join(countries)}_{start_year}_{end_year}"
     
     # Try loading from cache
     cached_data = load_data_cache(cache_key)
     if cached_data is not None:
         return cached_data
     
-    # Fetch fresh data
-    if indicator == "GDP":
-        data = wb_api.fetch_gdp(countries, start_year, end_year)
-    elif indicator == "Inflation":
-        data = wb_api.fetch_inflation(countries, start_year, end_year)
-    elif indicator == "Unemployment":
-        data = wb_api.fetch_unemployment(countries, start_year, end_year)
-    else:
-        return pd.DataFrame()
+    # Fetch fresh data using the new generic method
+    data = wb_api.fetch_by_indicator_key(indicator_key, countries, start_year, end_year)
     
     # Save to cache
     if not data.empty:
@@ -115,7 +114,7 @@ def main():
     all_countries = wb_api.POPULAR_COUNTRIES
     
     # Country selection with popular defaults
-    default_countries = ['USA', 'CHN', 'IND', 'DEU', 'JPN']
+    default_countries = ['IND']
     selected_country_codes = st.sidebar.multiselect(
         "Choose countries to compare:",
         options=list(all_countries.keys()),
@@ -129,15 +128,26 @@ def main():
     
     # Indicator selection
     st.sidebar.subheader("Select Indicator")
-    indicator = st.sidebar.selectbox(
-        "Economic Indicator:",
-        ["GDP", "Inflation", "Unemployment"],
-        help="""
-        - GDP: Gross Domestic Product (current US$)
-        - Inflation: Consumer prices annual %
-        - Unemployment: % of total labor force
-        """
+    
+    # Category selection
+    category = st.sidebar.selectbox(
+        "Choose Category:",
+        options=list(wb_api.INDICATOR_CATEGORIES.keys()),
+        help="Select a data category to explore"
     )
+    
+    # Get indicators for selected category
+    available_indicators = wb_api.INDICATOR_CATEGORIES[category]
+    
+    # Indicator selection within category
+    indicator_name = st.sidebar.selectbox(
+        "Choose Indicator:",
+        options=list(available_indicators.keys()),
+        help="Select the specific indicator to visualize"
+    )
+    
+    # Get the indicator key for API calls
+    indicator_key = available_indicators[indicator_name]
     
     # Year range
     st.sidebar.subheader("Time Period")
@@ -159,7 +169,7 @@ def main():
     
     # Prediction options (only for GDP)
     show_prediction = False
-    if indicator == "GDP":
+    if indicator_key == "gdp":
         st.sidebar.subheader("🔮 Prediction")
         show_prediction = st.sidebar.checkbox("Enable GDP Prediction", value=False)
     
@@ -175,33 +185,38 @@ def main():
     if not st.session_state['data_loaded']:
         st.info("👈 Configure your settings in the sidebar and click 'Load Data' to begin.")
         
-        # Show some information
-        col1, col2, col3 = st.columns(3)
+        # Show category information
+        st.markdown("### 📚 Available Data Categories")
         
-        with col1:
-            st.markdown("### 📈 GDP")
-            st.write("Gross Domestic Product measures the total economic output of a country.")
+        cols = st.columns(3)
+        categories_list = list(wb_api.INDICATOR_CATEGORIES.keys())
         
-        with col2:
-            st.markdown("### 💹 Inflation")
-            st.write("Annual percentage change in consumer prices, indicating purchasing power.")
+        for idx, cat in enumerate(categories_list):
+            with cols[idx % 3]:
+                indicator_count = len(wb_api.INDICATOR_CATEGORIES[cat])
+                st.markdown(f"**{cat}**")
+                st.write(f"{indicator_count} indicators available")
         
-        with col3:
-            st.markdown("### 👥 Unemployment")
-            st.write("Percentage of labor force that is jobless and seeking employment.")
+        st.markdown("---")
+        st.markdown(f"### 🌍 Total Available Data")
+        st.markdown(f"- **{len(wb_api.INDICATOR_CATEGORIES)} Categories**")
+        st.markdown(f"- **{len(wb_api.INDICATORS)} Indicators**")
+        st.markdown(f"- **{len(wb_api.POPULAR_COUNTRIES)} Countries**")
         
         st.stop()
     
     # Load data
-    with st.spinner(f"Fetching {indicator} data from World Bank..."):
-        df = fetch_data(indicator, selected_country_codes, start_year, end_year)
+    with st.spinner(f"Fetching {indicator_name} data from World Bank..."):
+        df = fetch_data(indicator_key, selected_country_codes, start_year, end_year)
     
     if df.empty:
         st.error("❌ No data available for the selected parameters. Try different countries or years.")
         st.stop()
     
     # Display metrics
-    st.header(f"📊 {indicator} Analysis")
+    st.header(f"📊 {indicator_name}")
+    st.markdown(f"**Category:** {category}")
+    st.markdown("---")
     
     # Latest values
     latest = get_latest_values(df)
@@ -210,10 +225,13 @@ def main():
     cols = st.columns(min(len(selected_country_codes), 4))
     for idx, (_, row) in enumerate(latest.iterrows()):
         with cols[idx % 4]:
-            if indicator == "GDP":
+            # Smart formatting based on indicator type
+            if 'pct' in indicator_key or 'rate' in indicator_key or 'growth' in indicator_key:
+                value_str = format_percentage(row['value'])
+            elif 'population' in indicator_key or 'gdp' in indicator_key or 'gni' in indicator_key:
                 value_str = format_large_number(row['value'])
             else:
-                value_str = format_percentage(row['value'])
+                value_str = f"{row['value']:,.2f}"
             
             st.metric(
                 label=f"{row['country']} ({int(row['year'])})",
@@ -224,30 +242,32 @@ def main():
     tab1, tab2, tab3, tab4 = st.tabs(["📈 Trends", "📊 Statistics", "🔍 Analysis", "📥 Data"])
     
     with tab1:
-        st.subheader(f"{indicator} Over Time")
+        st.subheader(f"{indicator_name} Over Time")
         
-        # Line chart
-        if indicator == "GDP":
-            y_label = "GDP (Current US$)"
-        elif indicator == "Inflation":
-            y_label = "Inflation Rate (%)"
-        else:
-            y_label = "Unemployment Rate (%)"
+        # Determine appropriate y-axis label
+        y_label = indicator_name
         
         fig_line = create_line_chart(
             df,
-            f"{indicator} Trends ({start_year}-{end_year})",
+            f"{indicator_name} Trends ({start_year}-{end_year})",
             y_label,
             height=500
         )
         st.plotly_chart(fig_line, use_container_width=True)
+
+        # Generate dip/rise explanations
+        st.markdown("### 📉📈 Dips & Rises: Contextual Explanations")
+        with st.spinner("Analyzing movements..."):
+            explanations = generate_explanations(df, indicator_key, top_n=2)
+        for exp in explanations:
+            st.markdown(f"- {exp}")
         
         # Growth rates
         if show_growth:
             st.subheader("Year-over-Year Growth Rates")
             fig_growth = create_growth_rate_chart(
                 df,
-                f"{indicator} Growth Rate ({start_year}-{end_year})",
+                f"{indicator_name} Growth Rate ({start_year}-{end_year})",
                 height=450
             )
             st.plotly_chart(fig_growth, use_container_width=True)
@@ -268,7 +288,7 @@ def main():
                 fig_comparison = create_comparison_bar_chart(
                     df,
                     comparison_years,
-                    f"{indicator} Comparison",
+                    f"{indicator_name} Comparison",
                     y_label,
                     height=450
                 )
@@ -280,14 +300,17 @@ def main():
         # Calculate statistics
         stats = calculate_statistics(df)
         
-        # Format statistics based on indicator
-        if indicator == "GDP":
+        # Smart formatting based on indicator type
+        if 'pct' in indicator_key or 'rate' in indicator_key or 'growth' in indicator_key:
+            for col in ['mean', 'median', 'min', 'max', 'std', 'latest']:
+                stats[col] = stats[col].apply(lambda x: f"{x:.2f}%")
+        elif 'population' in indicator_key or 'gdp' in indicator_key or 'gni' in indicator_key:
             for col in ['mean', 'median', 'min', 'max', 'latest']:
                 stats[col] = stats[col].apply(format_large_number)
             stats['std'] = stats['std'].apply(lambda x: format_large_number(x, 1))
         else:
             for col in ['mean', 'median', 'min', 'max', 'std', 'latest']:
-                stats[col] = stats[col].apply(lambda x: f"{x:.2f}%")
+                stats[col] = stats[col].apply(lambda x: f"{x:,.2f}")
         
         st.dataframe(
             stats,
@@ -310,9 +333,12 @@ def main():
         
         if not cagr_df.empty:
             cagr_display = cagr_df.copy()
-            if indicator == "GDP":
+            if 'population' in indicator_key or 'gdp' in indicator_key or 'gni' in indicator_key:
                 cagr_display['start_value'] = cagr_display['start_value'].apply(format_large_number)
                 cagr_display['end_value'] = cagr_display['end_value'].apply(format_large_number)
+            else:
+                cagr_display['start_value'] = cagr_display['start_value'].apply(lambda x: f"{x:,.2f}")
+                cagr_display['end_value'] = cagr_display['end_value'].apply(lambda x: f"{x:,.2f}")
             cagr_display['cagr'] = cagr_display['cagr'].apply(lambda x: f"{x:.2f}%")
             
             st.dataframe(
@@ -330,7 +356,7 @@ def main():
             )
     
     with tab3:
-        if indicator == "GDP" and show_prediction:
+        if indicator_key == "gdp" and show_prediction:
             st.subheader("🔮 GDP Prediction Model")
             
             # Train predictor
@@ -381,12 +407,12 @@ def main():
             latest_year = df['year'].max()
             ranking = df[df['year'] == latest_year].sort_values('value', ascending=False)
             
-            st.markdown(f"#### Top Countries by {indicator} ({int(latest_year)})")
+            st.markdown(f"#### Top Countries by {indicator_name} ({int(latest_year)})")
             
             fig_ranking = create_bar_chart(
                 df,
                 latest_year,
-                f"{indicator} Rankings",
+                f"{indicator_name} Rankings",
                 y_label,
                 height=450
             )
@@ -402,7 +428,7 @@ def main():
                 "country": "Country",
                 "country_code": "Code",
                 "year": "Year",
-                "value": indicator
+                "value": indicator_name
             },
             hide_index=True,
             use_container_width=True
@@ -413,7 +439,7 @@ def main():
         st.download_button(
             label="📥 Download Data as CSV",
             data=csv,
-            file_name=f"{indicator}_{start_year}_{end_year}.csv",
+            file_name=f"{indicator_key}_{start_year}_{end_year}.csv",
             mime="text/csv"
         )
     
@@ -421,8 +447,7 @@ def main():
     st.markdown("---")
     st.markdown("""
         <div style='text-align: center; color: #666; font-size: 0.9rem;'>
-            Data source: <a href='https://data.worldbank.org/' target='_blank'>World Bank Open Data</a> | 
-            Built with ❤️ using Streamlit
+            Data source: <a href='https://data.worldbank.org/' target='_blank'>World Bank Open Data</a>
         </div>
     """, unsafe_allow_html=True)
 
